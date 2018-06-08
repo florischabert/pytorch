@@ -124,16 +124,6 @@ THP_API void THPUtils_invalidArguments(
         PyObject *given_args, PyObject *given_kwargs,
         const char *function_name, size_t num_options, ...);
 
-#define THPUtils_assert_PyImport(name, module)                          \
-  PyObject* module = PyImport_ImportModule(name);                       \
-  if (!module) {                                                        \
-    if (PyErr_Occurred()) {                                             \
-      PyErr_Print();                                                    \
-    }                                                                   \
-    THPUtils_setError("class loader couldn't access %s", name);         \
-    return NULL;                                                        \
-  }
-
 #ifdef _THP_CORE
 
 bool THPUtils_checkIntTuple(PyObject *arg);
@@ -143,11 +133,10 @@ void THPUtils_addPyMethodDefs(std::vector<PyMethodDef>& vector, PyMethodDef* met
 
 int THPUtils_getCallable(PyObject *arg, PyObject **result);
 
-#define THStoragePtr TH_CONCAT_3(TH,Real,StoragePtr)
-#define THTensorPtr  TH_CONCAT_3(TH,Real,TensorPtr)
+#define THWStoragePtr TH_CONCAT_3(TH,Real,StoragePtr)
+#define THWTensorPtr  TH_CONCAT_3(TH,Real,TensorPtr)
 #define THPStoragePtr TH_CONCAT_3(THP,Real,StoragePtr)
 #define THPTensorPtr  TH_CONCAT_3(THP,Real,TensorPtr)
-#define THSTensorPtr  TH_CONCAT_3(THS,Real,TensorPtr)
 #define THSPTensorPtr  TH_CONCAT_3(THSP,Real,TensorPtr)
 
 typedef THPPointer<THPGenerator> THPGeneratorPtr;

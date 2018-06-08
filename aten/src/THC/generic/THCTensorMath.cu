@@ -7,7 +7,7 @@ THCTensor_(fill)(THCState* state, THCTensor *self_, real value)
 {
   THCAssertSameGPU(THCTensor_(checkGPU)(state, 1, self_));
 
-  if (!THC_pointwiseApply1(
+  if (!THC_pointwiseApply1<real>(
         state, self_, TensorFillOp<real>(value))) {
     THArgCheck(false, 1, CUTORCH_DIM_WARNING);
   }
@@ -25,7 +25,7 @@ THCTensor_(zero)(THCState *state, THCTensor *self_)
                                 sizeof(real) * THCTensor_(nElement)(state, self_),
                                 THCState_getCurrentStream(state)));
   } else {
-    if (!THC_pointwiseApply1(
+    if (!THC_pointwiseApply1<real>(
           state, self_,
           TensorFillOp<real>(ScalarConvert<int, real>::to(0)))) {
       THArgCheck(false, 1, CUTORCH_DIM_WARNING);
@@ -139,6 +139,11 @@ void THCTensor_(catArray)(THCState *state, THCTensor *result,
     }
   }
 
+  // If all inputs are empty tensors, return an empty tensor
+  if (notEmptyTensor == NULL) {
+    return;
+  }
+
   // In the event that the user specified -1 as the concat dimension, then
   // we want to pick the nDims as dimension to cat along (and thus nDims - 1 as the
   // value due to 0-based indexing). If the nDims is // 0 (i.e. we are catting all
@@ -169,7 +174,7 @@ void THCTensor_(catArray)(THCState *state, THCTensor *result,
     if (dim == cat_dimension) {
       result_dim_size = cat_dim_size;
     }
-    size->data[dim] = result_dim_size;
+    THLongStorage_data(size)[dim] = result_dim_size;
   }
   THCTensor_(resize)(state, result, size, NULL);
   THLongStorage_free(size);
@@ -187,10 +192,10 @@ void THCTensor_(catArray)(THCState *state, THCTensor *result,
   if (numInputs > 1 &&
       !hasEmptyInput &&
       THCTensor_(nDimension)(state, result) <= CAT_ARRAY_MAX_INPUT_DIMS &&
-      TensorUtils<THCTensor>::canUse32BitIndexMath(state, result) &&
-      TensorUtils<THCTensor>::allContiguous(state, inputs, numInputs) &&
-      TensorUtils<THCTensor>::all32BitIndexable(state, inputs, numInputs) &&
-      TensorUtils<THCTensor>::allSameDevice(state, inputs, numInputs)) {
+      THCTensor_canUse32BitIndexMath(state, result) &&
+      THCTensor_allContiguous(state, (const _THCTensor **)inputs, numInputs) &&
+      THCTensor_all32BitIndexable(state, (const _THCTensor **)inputs, numInputs) &&
+      THCTensor_allSameDevice(state, (const _THCTensor **)inputs, numInputs)) {
 
     // First, let's set up our kernel parameters. We start with a raw pointer to the storage
     // for the output Tensor.
@@ -475,30 +480,32 @@ void THCTensor_(logspace)(THCState *state, THCTensor *r_, real a, real b, int64_
 
 void THCTensor_(range)(THCState *state, THCTensor *r_, accreal xmin, accreal xmax, accreal step) {
   THCAssertSameGPU(THCTensor_(checkGPU)(state, 1, r_));
-  THArgCheck(step > 0 || step < 0, 3, "step must be a non-null number");
+  THArgCheck(step > 0 || step < 0, 3, "step must be nonzero");
   THArgCheck(((step > 0) && (xmax >= xmin)) || ((step < 0) && (xmax <= xmin))
-              , 2, "upper bound and larger bound incoherent with step sign");
+              , 2, "upper bound and larger bound inconsistent with step sign");
   ptrdiff_t size = (ptrdiff_t) (((xmax - xmin) / step) + 1);
   if (THCTensor_(nElement)(state, r_) != size) THCTensor_(resize1d)(state, r_, size);
-  THCTensor *r = THCTensor_(isContiguous)(state, r_)
-                 ? r_
-                 : THCTensor_(newContiguous)(state, r_);
+  THCTensor *r = THCTensor_(newContiguous)(state, r_);
   LinspaceOp<real,accreal> linspace_method(xmin, step);
   thrust::device_ptr<real> data_(THCTensor_(data)(state, r));
   thrust::tabulate(data_, data_ + size, linspace_method);
-  if (!THCTensor_(isContiguous)(state, r_)) THCTensor_(freeCopyTo)(state, r, r_);
+  THCTensor_(freeCopyTo)(state, r, r_);
   THCudaCheck(cudaGetLastError());
 }
 
 void THCTensor_(arange)(THCState* state, THCTensor *r_, accreal xmin, accreal xmax, accreal step) {
-#if defined(THC_REAL_IS_FLOAT) || defined(THC_REAL_IS_DOUBLE) || defined(THC_REAL_IS_HALF)
-  int m = fmod(xmax - xmin, step) == 0;
-#else
-  int m = (xmax - xmin) % step == 0;
-#endif
-  if (m)
-    xmax -= step;
-  THCTensor_(range)(state, r_, xmin, xmax, step);
+  THCAssertSameGPU(THCTensor_(checkGPU)(state, 1, r_));
+  THArgCheck(step > 0 || step < 0, 3, "step must be nonzero");
+  THArgCheck(((step > 0) && (xmax >= xmin)) || ((step < 0) && (xmax <= xmin))
+              , 2, "upper bound and larger bound inconsistent with step sign");
+  ptrdiff_t size = (ptrdiff_t) ceil(ScalarConvert<accreal, double>::to(xmax - xmin) / step);
+  if (THCTensor_(nElement)(state, r_) != size) THCTensor_(resize1d)(state, r_, size);
+  THCTensor *r = THCTensor_(newContiguous)(state, r_);
+  LinspaceOp<real,accreal> linspace_method(xmin, step);
+  thrust::device_ptr<real> data_(THCTensor_(data)(state, r));
+  thrust::tabulate(data_, data_ + size, linspace_method);
+  THCTensor_(freeCopyTo)(state, r, r_);
+  THCudaCheck(cudaGetLastError());
 }
 
 #endif

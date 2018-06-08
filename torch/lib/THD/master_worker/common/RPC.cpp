@@ -7,14 +7,15 @@
 #include <memory>
 #include <stdexcept>
 
-namespace thd { namespace rpc {
+namespace thd {
+namespace rpc {
 
 RPCMessage::RPCMessage()
   : _msg(0)
   , _offset(0)
 {}
 
-RPCMessage::RPCMessage(char* str, std::size_t size)
+RPCMessage::RPCMessage(char* str, size_t size)
   : _msg(str, size)
   , _offset(0)
 {}
@@ -45,7 +46,7 @@ RPCMessage::size_type RPCMessage::remaining() const {
   return _msg.length() - _offset;
 }
 
-const char* RPCMessage::read(std::size_t num_bytes) {
+const char* RPCMessage::read(size_t num_bytes) {
   if (_offset + num_bytes > _msg.length())
     throw std::out_of_range("invalid access: out of bounds");
   const char* ret_val = _msg.data() + _offset;
@@ -139,7 +140,7 @@ THLongStorage* unpackTHLongStorage(RPCMessage& raw_message) {
   if (is_null) return NULL;
   ptrdiff_t size = unpackScalar<ptrdiff_t>(raw_message);
   THLongStorage* storage = THLongStorage_newWithSize(size);
-  int64_t* data = storage->data;
+  int64_t* data = THLongStorage_data(storage);
 
   try {
     for (int i = 0; i < size; i++) {

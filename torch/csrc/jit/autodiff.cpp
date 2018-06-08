@@ -12,14 +12,18 @@ namespace torch { namespace jit {
 using value_map = std::unordered_map<Value*, Value*>;
 using value_set = std::unordered_set<Value*>;
 
-// TODO: unsqueeze!
-std::unordered_set<Symbol> differentiable_kinds = {
-  kadd, ksub, kmul, kConstant, kReplaceIfUndef,
-  ksigmoid, ktanh, kmm, kchunk, ksplit, kt, kneg,
-  kunsqueeze
-};
-
 bool isDifferentiable(Node * n) {
+  static std::unordered_set<Symbol> differentiable_kinds = {
+    aten::add, aten::sub, aten::mul, prim::Constant, prim::ReplaceIfUndef,
+    aten::sigmoid, aten::tanh, aten::mm, aten::chunk, aten::split, aten::t, aten::neg,
+    aten::unsqueeze, aten::expand, aten::addmm
+  };
+  // TODO: check this more generally via schema
+  // This check ensures that the `alpha` and `beta` attributes on this addmm
+  // node are constant and equivalent to 1.0
+  if (n->kind() == aten::addmm && n->inputs().size() > 3) {
+    return false;
+  }
   return differentiable_kinds.count(n->kind()) > 0;
 }
 
@@ -34,44 +38,44 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
     auto inputs = fmap<SymbolicVariable>(node->inputs());
     auto outputs = fmap<SymbolicVariable>(node->outputs());
     switch(node->kind()) {
-      case kadd:
+      case aten::add:
         // o = a - alpha*other
         if(inputs.size() == 1)
           return { grads.at(0) };
           // o = a + alpha*b
-        return {grads.at(0), grads.at(0) * at::Scalar(node->t(kalpha)) };
-      case ksub:
+        return {grads.at(0), grads.at(0) * at::Scalar(node->t(attr::alpha)) };
+      case aten::sub:
         // o = a - alpha*other
         if(inputs.size() == 1)
           return {grads.at(0)};
         // o = a - alpha*b
-        return {grads.at(0), -grads.at(0) * at::Scalar(node->t(kalpha))};
-      case kmul:
+        return {grads.at(0), -grads.at(0) * at::Scalar(node->t(attr::alpha))};
+      case aten::mul:
         // o = a * other
         if(inputs.size() == 1)
-          return {grads.at(0) * at::Scalar(node->t(kother))};
+          return {grads.at(0) * at::Scalar(node->t(attr::other))};
         // o = a * b
         return {grads.at(0) * inputs.at(1), grads.at(0) * inputs.at(0)};
-      case kConstant:
+      case prim::Constant:
         return {};
-      case kReplaceIfUndef:
+      case prim::ReplaceIfUndef:
         return {grads.at(0), grads.at(0)};
-      case ksigmoid:
+      case aten::sigmoid:
         return {grads.at(0) * outputs.at(0) * (1 - outputs.at(0))};
-      case ktanh:
+      case aten::tanh:
         return {grads.at(0) * (1 - outputs.at(0) * outputs.at(0))};
-      case kchunk:
-      case ksplit:
-        return {SymbolicVariable::cat(grads, node->i(kdim))};
-      case kt:
+      case aten::chunk:
+      case aten::split:
+        return {SymbolicVariable::cat(grads, node->i(attr::dim))};
+      case aten::t:
         return {grads.at(0).t()};
-      case kneg:
+      case aten::neg:
         return {-grads.at(0)};
-      case kview:
+      case aten::view:
         return {grads.at(0).view(inputs.at(0).sizes())};
-      case kunsqueeze:
-        return {grads.at(0).squeeze(node->i(kdim))};
-      case kmm: {
+      case aten::unsqueeze:
+        return {grads.at(0).squeeze(node->i(attr::dim))};
+      case aten::mm: {
         SymbolicVariable dmat1, dmat2;
         if (auto type = inputs.at(0).value()->type()->cast<TensorType>()) {
           auto sizes = type->sizes(), strides = type->strides();
@@ -91,15 +95,15 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
             dmat2 = inputs.at(0).t().mm(grads.at(0));
           }
         } else {
-          dmat2 = grads.at(0).mm(inputs.at(1).t());
+          dmat2 = inputs.at(0).t().mm(grads.at(0));
         }
         return {dmat1, dmat2};
       }
-      case kexpand: {
+      case aten::expand: {
         const auto& input_sizes = inputs.at(0).sizes();
         if (input_sizes.size() == 0)
           return {grads.at(0).sum()};
-        auto grad_sizes = node->is(ksize);
+        auto grad_sizes = node->is(attr::size);
         auto grad = grads.at(0);
         while (grad_sizes.size() > input_sizes.size()) {
           grad = grad.sum(0, false);
@@ -112,10 +116,10 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
         }
         return {grad};
       }
-      case ksqueeze: {
+      case aten::squeeze: {
         const auto& sizes = inputs.at(0).sizes();
-        if (node->hasAttribute(kdim)) {
-          int dim = node->i(kdim);
+        if (node->hasAttribute(attr::dim)) {
+          int dim = node->i(attr::dim);
           return {sizes.at(dim) > 1 ? grads.at(0) : grads.at(0).unsqueeze(dim)};
         } else {
           std::vector<size_t> squeezed_dims;
@@ -129,8 +133,8 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
           return {returned_grad};
         }
       }
-      case kcat: {
-        int dim = node->i(kdim);
+      case aten::cat: {
+        int dim = node->i(attr::dim);
         const auto& first_sizes = inputs.at(0).sizes();
         const auto has_first_sizes = [&first_sizes](SymbolicVariable var) {
           return var.sizes() == first_sizes;
@@ -152,11 +156,11 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
       }
     }
     throw std::runtime_error(std::string("don't support differentiation of `") +
-                            node->kind().toString() + "`");
+                            node->kind().toDisplayString() + "`");
   };
   const auto has_tensor_type = [](Value *v) { return v->isTensor(); };
   if (!isDifferentiable(node)) {
-    throw std::runtime_error(std::string("differentiation of ") + node->kind().toString() + " "
+    throw std::runtime_error(std::string("differentiation of ") + node->kind().toDisplayString() + " "
                              "is not supported, or it is missing necessary type information");
   }
   if (!std::all_of(node->inputs().begin(), node->inputs().end(), has_tensor_type) ||
@@ -177,7 +181,7 @@ static value_set findAllRequiresGradNodes(
   const auto requires_grad = [&](Value *v) { return requires_grad_set.count(v) > 0; };
 
   auto inputs = graph.inputs();
-  for (std::size_t i = 0, num_inputs = inputs.size(); i < num_inputs; ++i) {
+  for (size_t i = 0, num_inputs = inputs.size(); i < num_inputs; ++i) {
     if (!input_requires_grad[i]) continue;
     requires_grad_set.emplace(inputs[i]);
   }
@@ -198,9 +202,9 @@ static Value* createZerosLike(Value *v) {
   AutoGPU gpu_guard(type->device());
 
   auto & at_type = type->device() == -1 ? at::CPU(type->scalarType()) : at::CUDA(type->scalarType());
-  auto zeros = at_type.zeros({1}).expand(type->sizes());
+  auto zeros = at::zeros(at_type, {1}).expand(type->sizes());
   Node *constant = graph->createConstant(zeros)
-                        ->i_(kis_zero, 1);
+                        ->i_(attr::is_zero, 1);
   graph->insertNode(constant);
   return constant->output();
 }
@@ -213,7 +217,7 @@ static Value* createZerosLike(Value *v) {
 // 'dv' is known to be undef, and the zeros will be propagated if possible.
 static Value* createUndefGuard(Value * dv, Value * alternative) {
   Graph* graph = dv->owningGraph();
-  Node * n = graph->create(kReplaceIfUndef, {dv, alternative});
+  Node * n = graph->create(prim::ReplaceIfUndef, {dv, alternative});
   return graph->insertNode(n)->output();
 }
 
@@ -242,9 +246,9 @@ static ReverseDetails addReverseInline(Gradient& grad_desc,
   // note: reverse_node is intentionally not inserted to avoid
   // accidentally acting on it (e.g. in elminate dead code),
   // std::cout << *reverse_node << to view its state.
-  auto reverse_node = graph.create("Reverse"_sym, 0);
+  auto reverse_node = graph.create(prim::Reverse, 0);
   auto reverse_block = reverse_node->addBlock();
-  WithInsertPoint guard(graph, reverse_block);
+  WithInsertPoint guard(reverse_block);
 
   auto requires_grad_set = findAllRequiresGradNodes(graph, input_requires_grad);
   const auto requires_grad = [&](Value *v) { return requires_grad_set.count(v) > 0; };
@@ -266,7 +270,7 @@ static ReverseDetails addReverseInline(Gradient& grad_desc,
   };
 
   auto outputs = graph.outputs();
-  for (std::size_t i = 0, num_outputs = outputs.size(); i < num_outputs; ++i) {
+  for (size_t i = 0, num_outputs = outputs.size(); i < num_outputs; ++i) {
     Value * output = outputs[i];
     if (!requires_grad(output))
       continue;
@@ -283,13 +287,13 @@ static ReverseDetails addReverseInline(Gradient& grad_desc,
       continue;
     value_list grad_inputs = gradientForNode(node, fmap(node->outputs(), get_grad));
     JIT_ASSERT(grad_inputs.size() == node->inputs().size());
-    for (std::size_t i = 0, num_inputs = grad_inputs.size(); i < num_inputs; ++i) {
+    for (size_t i = 0, num_inputs = grad_inputs.size(); i < num_inputs; ++i) {
       set_grad(inputs[i], grad_inputs[i]);
     }
   }
 
   auto inputs = graph.inputs();
-  for (std::size_t i = 0, num_inputs = inputs.size(); i < num_inputs; ++i) {
+  for (size_t i = 0, num_inputs = inputs.size(); i < num_inputs; ++i) {
     Value * input = inputs[i];
     if (!requires_grad(input))
       continue;
@@ -302,9 +306,9 @@ static ReverseDetails addReverseInline(Gradient& grad_desc,
 
 bool isZero(Value * v) {
   auto n = v->node();
-  return n->kind() == kConstant &&
-    n->hasAttribute(kis_zero) &&
-    n->i(kis_zero);
+  return n->kind() == prim::Constant &&
+    n->hasAttribute(attr::is_zero) &&
+    n->i(attr::is_zero);
 }
 
 // In the case where an input is routed to an output
@@ -324,7 +328,7 @@ static void passthroughUndefs(std::shared_ptr<Graph> graph) {
   bool changed = false;
   for(size_t i = 0; i < graph->outputs().size(); i++) {
       Value * v = graph->outputs()[i];
-      if(v->node()->kind() == kReplaceIfUndef) {
+      if(v->node()->kind() == prim::ReplaceIfUndef) {
         graph->return_node()->replaceInput(i, v->node()->inputs()[0]);
         changed = true;
       } else if(isZero(v)) {
@@ -396,12 +400,12 @@ static void lambdaLiftReverse(Gradient& grad_desc, ReverseDetails& rev_info) {
   // -- Construct primal_outputs, df_input_captures, f_real_outputs ----
   grad_desc.f_real_outputs = graph.outputs().size();
 
-  std::unordered_map<Value*, std::size_t> orig_primal_outputs_idx;
-  std::unordered_map<Value*, std::size_t> orig_primal_inputs_idx;
+  std::unordered_map<Value*, size_t> orig_primal_outputs_idx;
+  std::unordered_map<Value*, size_t> orig_primal_inputs_idx;
   // NOTE: we use emplace to avoid replacing an existing index if an output is repeated
-  for (std::size_t i = 0, num_outputs = graph.outputs().size(); i < num_outputs; ++i)
+  for (size_t i = 0, num_outputs = graph.outputs().size(); i < num_outputs; ++i)
     orig_primal_outputs_idx.emplace(graph.outputs()[i], i);
-  for (std::size_t i = 0, num_inputs = graph.inputs().size(); i < num_inputs; ++i)
+  for (size_t i = 0, num_inputs = graph.inputs().size(); i < num_inputs; ++i)
     orig_primal_inputs_idx[graph.inputs()[i]] = i;
 
   // NB: reverse_captures are already deduplicated, and in topo order
@@ -426,14 +430,14 @@ static void lambdaLiftReverse(Gradient& grad_desc, ReverseDetails& rev_info) {
   // NB [possible optimization]: use the newly added vjp input as soon as the first
   // vjp for that value is generated, to reduce the lifespan of this input
   // (currently we add it to the final vjp after all adds).
-  for (std::size_t i = grad_desc.f_real_outputs; i < graph.outputs().size(); ++i) {
+  for (size_t i = grad_desc.f_real_outputs; i < graph.outputs().size(); ++i) {
     Value * tmp = graph.outputs().at(i);
     // Add VJP inputs only for intermediates that actually required grad.
     if (rev_info.requires_grad_set.count(tmp) == 0) continue;
     Value * tmp_vjp_in = reverse_block->addInput()->setType(tmp->type());
     Value * tmp_vjp_prev = rev_info.grad_map.at(tmp);
     {
-      WithInsertPoint guard(graph, tmp_vjp_prev->node());
+      WithInsertPoint guard(tmp_vjp_prev->node());
       auto zeroes = createZerosLike(tmp);
       tmp_vjp_in = createUndefGuard(tmp_vjp_in, zeroes);
     }
@@ -479,7 +483,7 @@ Gradient differentiate(std::shared_ptr<Graph>& _graph, const std::vector<bool>& 
   std::swap(_graph, grad_desc.f);
   // XXX: Take care when handling outputs - they can be duplicated!
 
-  WithInsertPoint guard(*grad_desc.f, grad_desc.f->block());
+  WithInsertPoint guard(grad_desc.f->block());
   // Fills in df_input_vjps and df_output_vjps
   auto rev_info = addReverseInline(grad_desc, requires_grad);
   // addReverseInline has to call gradientForNode if *any* of the outputs

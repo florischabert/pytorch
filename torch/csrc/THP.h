@@ -1,7 +1,7 @@
 #ifndef THP_H
 #define THP_H
 
-#include <Python.h>
+#include "torch/csrc/python_headers.h"
 #include <stdbool.h>
 #include <TH/TH.h>
 #include <THS/THS.h>
@@ -24,6 +24,11 @@
 #define LIBRARY_STATE_TYPE
 #define LIBRARY_STATE_TYPE_NOARGS
 
+#define THWStorage THStorage
+#define THWStorage_(NAME) THStorage_(NAME)
+#define THWTensor THTensor
+#define THWTensor_(NAME) THTensor_(NAME)
+
 #include "PtrWrapper.h"
 #include "Exceptions.h"
 #include "Generator.h"
@@ -36,7 +41,6 @@
 
 #ifdef _THP_CORE
 #include "serialization.h"
-#include "allocators.h"
 
 #include "autograd/autograd.h"
 #endif

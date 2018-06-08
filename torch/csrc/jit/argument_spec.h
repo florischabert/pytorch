@@ -1,4 +1,5 @@
-#include <Python.h>
+#pragma once
+
 #include <iostream>
 #include <vector>
 #include "torch/csrc/autograd/variable.h"
@@ -179,6 +180,7 @@ inline std::ostream& operator<<(std::ostream & out, const ArgumentSpec & spec) {
       out << ", ";
     out << spec.tensorInfo(i);
   }
+  out << "}";
   return out;
 }
 
@@ -191,8 +193,8 @@ inline TensorInfo ArgumentSpec::tensorInfo(size_t i) const {
 namespace std {
   template<>
   struct hash<torch::jit::ArgumentSpec> {
-    std::size_t operator()(const torch::jit::ArgumentSpec & spec) const {
+    size_t operator()(const torch::jit::ArgumentSpec & spec) const {
       return spec.hashCode();
     }
   };
-};
+}
