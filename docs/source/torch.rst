@@ -33,6 +33,7 @@ Creation Ops
     range of distributions.
 
 .. autofunction:: tensor
+.. autofunction:: sparse_coo_tensor
 .. autofunction:: as_tensor
 .. autofunction:: from_numpy
 .. autofunction:: zeros
@@ -203,6 +204,7 @@ Reduction Ops
 .. autofunction:: cumprod
 .. autofunction:: cumsum
 .. autofunction:: dist
+.. autofunction:: logsumexp
 .. autofunction:: mean
 .. autofunction:: median
 .. autofunction:: mode
@@ -251,6 +253,7 @@ Other Operations
 .. autofunction:: diagflat
 .. autofunction:: diagonal
 .. autofunction:: einsum
+.. autofunction:: flip
 .. autofunction:: histc
 .. autofunction:: renorm
 .. autofunction:: trace
@@ -286,6 +289,7 @@ BLAS and LAPACK Operations
 .. autofunction:: mv
 .. autofunction:: orgqr
 .. autofunction:: ormqr
+.. autofunction:: pinverse
 .. autofunction:: potrf
 .. autofunction:: potri
 .. autofunction:: potrs
